@@ -1,0 +1,47 @@
+{
+  "description": "Pass/fail bar for Use Case 1 (plain-text business report Q&A). Each case asserts on the live /api/chat/ask response. Ground truth was verified against the indexed chunks in Postgres, not against the model's own output.",
+  "cases": [
+    {
+      "id": "visits-fy2018",
+      "question": "How many depository libraries did GPO staff visit in FY 2018?",
+      "groundTruth": "166 depository libraries in 25 states (pages 5 and 21)",
+      "expectEvidence": true,
+      "mustInclude": ["166"],
+      "expectSourcePages": [5, 21]
+    },
+    {
+      "id": "fdsys-successor",
+      "question": "What new digital system replaced FDsys, and when was it fully deployed?",
+      "groundTruth": "govinfo. The document frames the timing two ways: out of beta December 2017 (p22), and FDsys scheduled to be retired/replaced December 2018 (p10, p22, p39). Either date is acceptable.",
+      "expectEvidence": true,
+      "mustInclude": ["govinfo"],
+      "mustIncludeAny": [["december 2017", "december 2018", "fy 2018"]],
+      "expectSourcePages": [4, 10, 22, 39]
+    },
+    {
+      "id": "procurement-total",
+      "question": "How much did GPO procure in printing and information products in FY 2018 on behalf of federal agencies?",
+      "groundTruth": "more than $375 million (page 5)",
+      "expectEvidence": true,
+      "mustInclude": ["375"],
+      "mustIncludeAny": [["more than", "over", "in excess of"]],
+      "mustNotInclude": ["341.5", "341,5"],
+      "expectSourcePages": [5],
+      "note": "mustNotInclude guards against conflating this with $341.5M, the COST of procured work (p25), which retrieval also surfaces. mustIncludeAny enforces the 'more than' qualifier (system prompt rule 3)."
+    },
+    {
+      "id": "trap-wrong-year",
+      "question": "How many depository libraries did GPO staff visit in FY 2021?",
+      "groundTruth": "Not in the document - it covers FY 2018 only.",
+      "expectEvidence": false,
+      "mustNotInclude": ["166"],
+      "note": "The hardest trap. Retrieval surfaces the near-identical FY 2018 sentence with a high similarity score, so a score-threshold design would answer 166. Only the EVIDENCE: YES/NO gate catches this."
+    },
+    {
+      "id": "trap-absent-topic",
+      "question": "What was GPO's cloud computing budget for Microsoft Azure?",
+      "groundTruth": "Not in the document.",
+      "expectEvidence": false
+    }
+  ]
+}

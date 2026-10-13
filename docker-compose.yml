@@ -1,0 +1,19 @@
+# Local PostgreSQL with the pgvector extension, used as the backend's vector database.
+# Start it with: docker compose up -d
+services:
+  vectordb:
+    image: pgvector/pgvector:pg17
+    container_name: gpodocqa-vectordb
+    environment:
+      POSTGRES_DB: gpodocqa
+      POSTGRES_USER: gpodocqa
+      POSTGRES_PASSWORD: gpodocqa_dev
+    ports:
+      # 5433 on the host so it can't clash with a locally installed Postgres on 5432.
+      - "5433:5432"
+    volumes:
+      - vectordb-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  vectordb-data:
