@@ -5,6 +5,8 @@ namespace GpoDocQA.Api.Services;
 
 public class ChatService : IChatService
 {
+    // Dense and keyword search each pull a wider candidate pool; fusing them picks the final TopK.
+    private const int CandidatePoolSize = 20;
     private const int TopK = 5;
 
     private const string NoEvidenceAnswer = "The document does not provide enough information to answer this question.";
@@ -24,8 +26,12 @@ public class ChatService : IChatService
     {
         var documentIdText = documentId.ToString();
 
-        var questionEmbedding = await _geminiService.GenerateEmbeddingAsync(question, cancellationToken);
-        var matches = await _vectorStore.SearchAsync(questionEmbedding, documentIdText, TopK, cancellationToken);
+        var questionEmbedding = await _geminiService.GenerateEmbeddingAsync(question, EmbeddingPurpose.Query, cancellationToken);
+
+        // Hybrid retrieval: meaning-based (dense) and exact-term (keyword) candidates, merged by rank.
+        var denseMatches = await _vectorStore.SearchAsync(questionEmbedding, documentIdText, CandidatePoolSize, cancellationToken);
+        var keywordMatches = await _vectorStore.SearchKeywordsAsync(question, documentIdText, CandidatePoolSize, cancellationToken);
+        var matches = ReciprocalRankFusion.Fuse(TopK, denseMatches, keywordMatches);
 
         // We deliberately do NOT gate on a raw similarity-score threshold here: testing
         // showed cosine-similarity scores for a clearly unrelated question can be as high

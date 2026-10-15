@@ -1,9 +1,14 @@
+using System.Net.Http.Json;
+using System.Text.Json.Serialization;
+using GpoDocQA.Api.Configuration;
 using Microsoft.Extensions.AI;
 
 namespace GpoDocQA.Api.Services;
 
 public class GeminiService : IGeminiService
 {
+    private const string EmbedEndpointFormat = "https://generativelanguage.googleapis.com/v1beta/models/{0}:embedContent";
+
     // The Gemini SDK doesn't reliably fail fast on quota/rate-limit errors, so without
     // this a stuck call blocks the request indefinitely instead of surfacing an error.
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
@@ -12,20 +17,45 @@ public class GeminiService : IGeminiService
     // A daily quota won't, and then the second 429 is surfaced as GeminiQuotaExceededException.
     private static readonly TimeSpan QuotaRetryDelay = TimeSpan.FromSeconds(3);
 
-    private readonly IEmbeddingGenerator<string, Embedding<float>> _embeddingGenerator;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly GeminiOptions _options;
     private readonly IChatClient _chatClient;
 
-    public GeminiService(IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator, IChatClient chatClient)
+    public GeminiService(IHttpClientFactory httpClientFactory, GeminiOptions options, IChatClient chatClient)
     {
-        _embeddingGenerator = embeddingGenerator;
+        _httpClientFactory = httpClientFactory;
+        _options = options;
         _chatClient = chatClient;
     }
 
-    public Task<ReadOnlyMemory<float>> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken) =>
+    // Embeddings go straight to the REST endpoint (not the Microsoft.Extensions.AI wrapper) because
+    // that is the only way to set taskType and outputDimensionality explicitly.
+    public Task<ReadOnlyMemory<float>> GenerateEmbeddingAsync(
+        string text, EmbeddingPurpose purpose, CancellationToken cancellationToken) =>
         CallWithTimeoutAsync("embedding", async token =>
         {
-            var embeddings = await _embeddingGenerator.GenerateAsync([text], cancellationToken: token);
-            return embeddings[0].Vector;
+            using var request = new HttpRequestMessage(HttpMethod.Post, string.Format(EmbedEndpointFormat, _options.EmbeddingModel))
+            {
+                Content = JsonContent.Create(new EmbedRequest(
+                    new EmbedContent([new EmbedPart(text)]),
+                    purpose == EmbeddingPurpose.Query ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT",
+                    _options.EmbeddingDimensions))
+            };
+            request.Headers.Add("x-goog-api-key", _options.ApiKey);
+
+            using var response = await _httpClientFactory.CreateClient().SendAsync(request, token);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Status code goes in the message so GeminiQuotaExceededException.IsQuotaError can see a 429.
+                throw new HttpRequestException(
+                    $"Gemini embedding request failed with status {(int)response.StatusCode} ({response.StatusCode}).",
+                    inner: null,
+                    response.StatusCode);
+            }
+
+            var body = await response.Content.ReadFromJsonAsync<EmbedResponse>(cancellationToken: token)
+                ?? throw new InvalidOperationException("Gemini returned an empty embedding response.");
+            return (ReadOnlyMemory<float>)body.Embedding.Values;
         }, cancellationToken);
 
     public Task<string> GenerateAnswerAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
@@ -81,4 +111,17 @@ public class GeminiService : IGeminiService
             throw new TimeoutException($"Gemini {operation} request timed out after {RequestTimeout.TotalSeconds}s.");
         }
     }
+
+    private record EmbedPart([property: JsonPropertyName("text")] string Text);
+
+    private record EmbedContent([property: JsonPropertyName("parts")] EmbedPart[] Parts);
+
+    private record EmbedRequest(
+        [property: JsonPropertyName("content")] EmbedContent Content,
+        [property: JsonPropertyName("taskType")] string TaskType,
+        [property: JsonPropertyName("outputDimensionality")] int OutputDimensionality);
+
+    private record EmbedValues([property: JsonPropertyName("values")] float[] Values);
+
+    private record EmbedResponse([property: JsonPropertyName("embedding")] EmbedValues Embedding);
 }

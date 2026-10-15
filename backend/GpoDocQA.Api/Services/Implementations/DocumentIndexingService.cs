@@ -28,6 +28,27 @@ public class DocumentIndexingService : IDocumentIndexingService
         _logger = logger;
     }
 
+    // The free tier caps embeddings per minute, and a full document is a burst of one call per chunk.
+    // GeminiService only retries once, briefly; here we can afford to wait out the minute window.
+    private const int MaxEmbeddingAttempts = 6;
+    private static readonly TimeSpan EmbeddingBackoffStep = TimeSpan.FromSeconds(15);
+
+    private async Task<ReadOnlyMemory<float>> EmbedWithBackoffAsync(string text, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _geminiService.GenerateEmbeddingAsync(text, EmbeddingPurpose.Document, cancellationToken);
+            }
+            catch (GeminiQuotaExceededException) when (attempt < MaxEmbeddingAttempts)
+            {
+                _logger.LogWarning("Embedding rate limit hit; waiting before retry {Attempt}/{Max}", attempt, MaxEmbeddingAttempts - 1);
+                await Task.Delay(EmbeddingBackoffStep * attempt, cancellationToken);
+            }
+        }
+    }
+
     public async Task IndexAsync(DocumentRecord record, CancellationToken cancellationToken)
     {
         record.Status = DocumentStatus.Processing;
@@ -76,7 +97,7 @@ public class DocumentIndexingService : IDocumentIndexingService
                 async (i, ct) =>
                 {
                     var draft = chunkDrafts[i];
-                    var embedding = await _geminiService.GenerateEmbeddingAsync(draft.Text, ct);
+                    var embedding = await EmbedWithBackoffAsync(draft.Text, ct);
 
                     chunks[i] = new DocumentChunk
                     {

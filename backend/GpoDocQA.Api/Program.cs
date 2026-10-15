@@ -40,8 +40,7 @@ if (string.IsNullOrWhiteSpace(geminiOptions.ApiKey))
 }
 
 builder.Services.AddSingleton(geminiOptions);
-builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(
-    new GeminiEmbeddingGenerator(apiKey: geminiOptions.ApiKey, model: geminiOptions.EmbeddingModel));
+builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IChatClient>(
     new GeminiChatClient(apiKey: geminiOptions.ApiKey, model: geminiOptions.ChatModel));
 builder.Services.AddSingleton<IGeminiService, GeminiService>();

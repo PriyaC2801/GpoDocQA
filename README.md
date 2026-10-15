@@ -37,8 +37,8 @@ instead of paying for the Gemini embedding calls again.
 ```
  AT STARTUP (indexing)
  Documents/GPO-Annual-report.pdf
-   └─► PdfPigTextExtractor  (82 pages of text)
-        └─► ChunkingService (300 words/chunk, 50-word overlap -> 126 chunks)
+   └─► PdfPigTextExtractor  (82 pages; layout-ordered blocks, repaired text, headers/footers dropped)
+        └─► ChunkingService (whole sentences, ~300 words/chunk, 1-2 sentence overlap -> 129 chunks)
              └─► already in pgvector?  ── yes ──► mark Ready, skip embedding
                        │ no
                        └─► Gemini embeddings (max 4 concurrent)
@@ -47,7 +47,7 @@ instead of paying for the Gemini embedding calls again.
  FOR EVERY QUESTION
  React UI ──POST /api/chat/ask──► ChatController ─► ChatService
                                                      1. embed the question
-                                                     2. RETRIEVE: cosine search in pgvector, top 5 chunks
+                                                     2. RETRIEVE: dense (pgvector) + keyword (Postgres full-text) top 20 each, fused by RRF -> top 5
                                                      3. AUGMENT:  prompt = rules + excerpts + question
                                                      4. GENERATE: Gemini answers + self-reports EVIDENCE: YES/NO
                                                      5. attach sources from OUR retrieval, never the model's claim
@@ -135,9 +135,9 @@ dotnet run --launch-profile https
 The API runs on **https://localhost:7003** with **http://localhost:5169** redirecting to it (307).
 Swagger UI is at https://localhost:7003/swagger.
 
-On the very first start it embeds all 126 chunks (watch for
-`Indexed document ...: 82 pages -> 126 chunks embedded and stored`). Later starts find the chunks already
-in pgvector and log `already indexed (126 chunks); skipping embedding`.
+On the very first start (or after clearing the `chunks` table to re-index) it embeds all 129 chunks (watch for
+`Indexed document ...: 82 pages -> 129 chunks embedded and stored`). Later starts find the chunks already
+in pgvector and log `already indexed (129 chunks); skipping embedding`.
 
 ### 3. Frontend (terminal 2)
 
@@ -186,7 +186,7 @@ Example `POST /api/chat/ask` response:
   "fileName": "GPO-Annual-report.pdf",
   "status": "Ready",
   "pageCount": 82,
-  "chunkCount": 126,
+  "chunkCount": 129,
   "errorMessage": null
 }
 ```
@@ -265,8 +265,8 @@ Other settings:
 | `DocumentStorage:StaticDocumentPath` | `appsettings.json` | `Documents/GPO-Annual-report.pdf` |
 | `ConnectionStrings:VectorDb` | `appsettings.Development.json` | `Host=localhost;Port=5433;...` |
 
-Pipeline constants live in code: `WordsPerChunk = 300` and `OverlapWords = 50` in
-[ChunkingService.cs](backend/GpoDocQA.Api/Services/Implementations/ChunkingService.cs), `TopK = 5` in
+Pipeline constants live in code: `WordsPerChunk = 300` and the overlap limits in
+[ChunkingService.cs](backend/GpoDocQA.Api/Services/Implementations/ChunkingService.cs), `TopK = 5` and `CandidatePoolSize = 20` in
 [ChatService.cs](backend/GpoDocQA.Api/Services/Implementations/ChatService.cs),
 `MaxConcurrentEmbeddingCalls = 4` and a 30-second Gemini `RequestTimeout` in
 [DocumentIndexingService.cs](backend/GpoDocQA.Api/Services/Implementations/DocumentIndexingService.cs)
@@ -305,8 +305,8 @@ vectors.
 - **No OCR.** A scanned/image-only PDF yields no extractable text and is marked `Failed`.
 - **No chat history.** Each question is answered independently, so follow-ups like "what about 2017?" do not
   resolve against the previous turn.
-- **Retrieval is pure semantic search**, fixed at the top 5 chunks. Hybrid search (keywords + vectors) would
-  match exact figures and proper nouns more reliably, and a re-ranking pass would improve excerpt quality.
-- **Chunking is word-count based** and splits per page, so a table or sentence spanning a page break is cut.
+- **No re-ranking.** Retrieval is hybrid (dense + keyword, merged by Reciprocal Rank Fusion), but the fused top 5
+  go straight to the model; a cross-encoder pass over the top 20 would improve excerpt quality.
+- **Chunks never cross a page**, so a table or sentence spanning a page break is cut.
 - **No streaming** — the answer appears all at once after the model finishes.
 - **No tests and no auth.** There is no automated evaluation, so retrieval changes are hard to measure.

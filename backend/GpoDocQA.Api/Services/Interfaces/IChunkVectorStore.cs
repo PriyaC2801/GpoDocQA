@@ -13,4 +13,11 @@ public interface IChunkVectorStore
     /// <summary>Finds the chunks most similar to <paramref name="queryEmbedding"/>, scoped to one document.</summary>
     Task<IReadOnlyList<ScoredChunk>> SearchAsync(
         ReadOnlyMemory<float> queryEmbedding, string documentId, int topK, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Full-text (keyword) search over chunk text, scoped to one document. Complements
+    /// <see cref="SearchAsync"/>: it finds exact terms, figures and names that embeddings blur.
+    /// </summary>
+    Task<IReadOnlyList<ScoredChunk>> SearchKeywordsAsync(
+        string question, string documentId, int topK, CancellationToken cancellationToken);
 }
