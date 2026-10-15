@@ -16,15 +16,16 @@ public static class RagResponseParser
 
         if (answerStartIndex < 0)
         {
-            // The model didn't follow the format; treat the whole reply as the answer
-            // rather than silently discarding it.
-            return new ParsedRagResponse(HasEvidence: true, Answer: rawResponse.Trim());
+            // The model didn't follow the format (or the reply was empty/blocked). Fail
+            // closed: never present an unverified reply as a grounded answer with sources.
+            return new ParsedRagResponse(HasEvidence: false, Answer: string.Empty);
         }
 
         var evidenceLine = lines.Take(answerStartIndex)
             .FirstOrDefault(l => l.TrimStart().StartsWith("EVIDENCE:", StringComparison.OrdinalIgnoreCase));
         var hasEvidence = evidenceLine is not null &&
-            evidenceLine.Contains("YES", StringComparison.OrdinalIgnoreCase);
+            evidenceLine.TrimStart()["EVIDENCE:".Length..].Trim()
+                .StartsWith("YES", StringComparison.OrdinalIgnoreCase);
 
         var answer = string.Join(
             '\n',

@@ -45,7 +45,17 @@ public class ChatController : ControllerBase
                 statusCode: StatusCodes.Status409Conflict);
         }
 
-        var response = await _chatService.AskAsync(request.DocumentId, request.Question, cancellationToken);
-        return Ok(response);
+        try
+        {
+            var response = await _chatService.AskAsync(request.DocumentId, request.Question, cancellationToken);
+            return Ok(response);
+        }
+        catch (GeminiQuotaExceededException)
+        {
+            return Problem(
+                title: "Gemini quota reached.",
+                detail: "The Gemini API quota or rate limit has been reached (the free tier allows only a few chat requests per day). Please try again later.",
+                statusCode: StatusCodes.Status429TooManyRequests);
+        }
     }
 }

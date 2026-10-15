@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../types/chat'
+import { SourceList } from './SourceList'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -24,6 +25,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   return (
     <div className={`message message-assistant${message.hasEvidence ? '' : ' message-no-evidence'}`}>
       <p>{message.content}</p>
+      {message.hasEvidence && <SourceList sources={message.sources} />}
     </div>
   )
 }

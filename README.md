@@ -63,9 +63,6 @@ and shows `Pending` → `Processing` → `Ready`.
 GpoDocQA/
 ├── README.md
 ├── docker-compose.yml                   pgvector container (host port 5433)
-├── tests/
-│   ├── rag-cases.json                   questions with known answers
-│   └── run-rag-tests.mjs                scores the live API against them
 ├── backend/GpoDocQA.Api/
 │   ├── GpoDocQA.Api.csproj
 │   ├── Program.cs                       startup: DI, CORS, Gemini + pgvector wiring
@@ -283,39 +280,6 @@ change `StaticDocumentId` in
 GUID — the id is what the chunks are stored under, so reusing it would collide with the old document's
 vectors.
 
-## Testing
-
-A regression suite scores the pipeline against questions with known answers, so prompt, chunking or model
-changes can be re-checked against the same bar. The stack must be running.
-
-```powershell
-node --use-system-ca tests/run-rag-tests.mjs            # all cases
-node --use-system-ca tests/run-rag-tests.mjs --verbose  # also print each answer
-node --use-system-ca tests/run-rag-tests.mjs --only procurement-total
-```
-
-`--use-system-ca` (Node 23+) lets Node trust the ASP.NET dev certificate; without it the script falls back
-to skipping TLS verification, which is why it prints a warning.
-
-Cases live in [tests/rag-cases.json](tests/rag-cases.json) and assert on the live `/api/chat/ask` response:
-
-| Field | Checks |
-|---|---|
-| `expectEvidence` | `hasEvidence` matches — this is what catches invented answers |
-| `mustInclude` | every string appears in the answer (the fact itself) |
-| `mustIncludeAny` | at least one per group — for legitimately ambiguous phrasing or dates |
-| `mustNotInclude` | a wrong-but-plausible value is absent (guards against conflating similar figures) |
-| `expectSourcePages` | at least one cited page is correct — grades retrieval separately from generation |
-
-Exit codes: `0` all passed, `1` a case failed, `2` setup problem (API down, document not `Ready`),
-`3` Gemini quota exhausted. Quota is reported separately from failure on purpose — hitting the daily limit
-is not a regression.
-
-Current cases cover the three baseline questions plus two traps: a question about the wrong fiscal year
-(retrieval surfaces a near-identical FY 2018 sentence, so only the `EVIDENCE: NO` gate catches it) and a
-topic absent from the report. Each run costs one Gemini chat call per case, which matters against the
-~20/day free tier.
-
 ## Troubleshooting
 
 | Problem | Fix |
@@ -345,5 +309,4 @@ topic absent from the report. Each run costs one Gemini chat call per case, whic
   match exact figures and proper nouns more reliably, and a re-ranking pass would improve excerpt quality.
 - **Chunking is word-count based** and splits per page, so a table or sentence spanning a page break is cut.
 - **No streaming** — the answer appears all at once after the model finishes.
-- **No tests and no auth.** A small set of questions with expected pages would make retrieval changes
-  measurable.
+- **No tests and no auth.** There is no automated evaluation, so retrieval changes are hard to measure.
