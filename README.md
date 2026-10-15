@@ -63,6 +63,7 @@ and shows `Pending` → `Processing` → `Ready`.
 GpoDocQA/
 ├── README.md
 ├── docker-compose.yml                   pgvector container (host port 5433)
+├── docs/INTERVIEW_GUIDE.md              likely interview questions, answered from this code
 ├── backend/GpoDocQA.Api/
 │   ├── GpoDocQA.Api.csproj
 │   ├── Program.cs                       startup: DI, CORS, Gemini + pgvector wiring
@@ -80,13 +81,15 @@ GpoDocQA/
 │   │   ├── Interfaces/                  IChatService, IDocumentStore, IGeminiService,
 │   │   │                                IChunkingService, IChunkVectorStore,
 │   │   │                                IDocumentIndexingService, IPdfTextExtractor
+│   │   ├── ReciprocalRankFusion.cs          merges dense + keyword rankings (RRF, k = 60)
+│   │   ├── GeminiQuotaExceededException.cs  raised on Gemini 429; surfaced as HTTP 429
 │   │   └── Implementations/
 │   │       ├── StaticDocumentLoader.cs      registers + indexes the PDF at startup
-│   │       ├── PdfPigTextExtractor.cs       PDF -> per-page text
-│   │       ├── ChunkingService.cs           pages -> overlapping chunks
+│   │       ├── PdfPigTextExtractor.cs       PDF -> layout-ordered, cleaned per-page text
+│   │       ├── ChunkingService.cs           pages -> sentence-based chunks with overlap
 │   │       ├── DocumentIndexingService.cs   the indexing pipeline (with skip-if-indexed)
-│   │       ├── GeminiService.cs             embeddings + chat, with a 30s timeout
-│   │       ├── PostgresChunkVectorStore.cs  upsert + cosine search in pgvector
+│   │       ├── GeminiService.cs             embeddings (direct embedContent call) + chat, 30s timeout, retry on 429
+│   │       ├── PostgresChunkVectorStore.cs  upsert, cosine search + full-text search
 │   │       ├── InMemoryDocumentStore.cs     document status registry
 │   │       └── ChatService.cs               the full RAG pipeline
 │   └── Controllers/                     DocumentsController, ChatController
@@ -161,8 +164,9 @@ Open **http://localhost:5173**.
 | GET | `/api/documents/{id}` | Same, by document id |
 | POST | `/api/chat/ask` | Ask a question. Body: `{ "documentId": "...", "question": "..." }` |
 
-`POST /api/chat/ask` returns `400` for an empty question, `404` for an unknown document id, and `409`
-while the document is not yet `Ready`.
+`POST /api/chat/ask` returns `400` for an empty question, `404` for an unknown document id, `409`
+while the document is not yet `Ready`, and `429` when the Gemini quota or rate limit is reached
+(the call is retried once before giving up).
 
 Example `POST /api/chat/ask` response:
 
@@ -268,7 +272,7 @@ Other settings:
 Pipeline constants live in code: `WordsPerChunk = 300` and the overlap limits in
 [ChunkingService.cs](backend/GpoDocQA.Api/Services/Implementations/ChunkingService.cs), `TopK = 5` and `CandidatePoolSize = 20` in
 [ChatService.cs](backend/GpoDocQA.Api/Services/Implementations/ChatService.cs),
-`MaxConcurrentEmbeddingCalls = 4` and a 30-second Gemini `RequestTimeout` in
+`MaxConcurrentEmbeddingCalls = 4` (with back-off retries on embedding rate limits) and a 30-second Gemini `RequestTimeout` in
 [DocumentIndexingService.cs](backend/GpoDocQA.Api/Services/Implementations/DocumentIndexingService.cs)
 and [GeminiService.cs](backend/GpoDocQA.Api/Services/Implementations/GeminiService.cs).
 
@@ -289,8 +293,8 @@ vectors.
 | Document status is `Failed`, log shows `Failed to connect to 127.0.0.1:5433` | The container is not running. Start Docker Desktop, then `docker compose up -d`, then restart the API |
 | UI shows "Could not reach the server" | Usually **not** a down server. Check: is the UI on 5173 (not 5174)? Is the API up on 7003? Is the container up on 5433? The UI reports any failed fetch — including a CORS block — with that one message |
 | `Port 5173 is already in use` | Another Vite dev server is running. Stop it; CORS only allows 5173 |
-| Chat request hangs, then fails after 30s | Gemini chat quota is exhausted (free tier is ~20 requests/day per model). Wait for the reset or switch `ChatModel` |
-| Error `429` / `RESOURCE_EXHAUSTED` | Same quota limit. The retry delay in the error message is how long until it resets |
+| Chat request fails with HTTP `429` ("Gemini quota reached") | Gemini chat quota is exhausted (free tier is ~20 requests/day per model). Wait for the reset or switch `ChatModel` |
+| First-start indexing is slow | Embedding calls are hitting the rate limit and backing off; it finishes on its own |
 | Error `404` mentioning a model | Google retired that model id. Update `ChatModel` / `EmbeddingModel` in `appsettings.json` |
 | Build fails: *file is locked by GpoDocQA.Api* | A previous `dotnet run` is still running. Stop it with `Ctrl+C` |
 | Answers say the document has no information | Expected when the question is not covered by the PDF — that is the `EVIDENCE: NO` path working |
@@ -309,4 +313,4 @@ vectors.
   go straight to the model; a cross-encoder pass over the top 20 would improve excerpt quality.
 - **Chunks never cross a page**, so a table or sentence spanning a page break is cut.
 - **No streaming** — the answer appears all at once after the model finishes.
-- **No tests and no auth.** There is no automated evaluation, so retrieval changes are hard to measure.
+- **No automated tests and no auth.** There is no automated evaluation, so retrieval changes are hard to measure.
